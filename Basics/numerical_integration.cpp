@@ -24,6 +24,16 @@ double trapezoidal(F&& f, double a, double b, int steps)
     return h * sum;
 }
 
+void Get_input(int my_rank, int comm_sz, double* a_p, double* b_p, int* n_p)
+    {
+    if (my_rank == 0) {
+    printf("Enter a, b, and n\n");
+    scanf("%lf %lf %d", a_p, b_p, n_p);
+    }
+    MPI_Bcast(a_p, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(b_p, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(n_p, 1, MPI_INT, 0, MPI_COMM_WORLD);
+}
 
 int main(void)
 {
@@ -35,35 +45,36 @@ int main(void)
     MPI_Comm_size(MPI_COMM_WORLD, &comm_sz);
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
 
-    double a = 0;
-    double b = M_PI;
-    double steps = 100000;
+    double a, b;
+    int steps;
+    Get_input(my_rank, comm_sz,&a, &b, &steps);
 
     double step_size = (b-a)/steps;
 
-    int per_process_steps = (int) steps/(comm_sz-1); 
+    int per_process_steps = steps/(comm_sz); 
+    int remainder = steps % comm_sz;
 
-    if(my_rank != 0)
+    double start = a + (b-a)*(my_rank)/(comm_sz);
+    double stop = a + (b-a)*(my_rank+1)/(comm_sz);
+
+    if(my_rank ==  comm_sz-1)
     {
-        double start = a + (b-a)*(my_rank - 1)/(comm_sz-1);
-        double stop = a + (b-a)*(my_rank)/(comm_sz-1);
-        
-        partial_integral = trapezoidal(fn,start, stop, per_process_steps);
-        printf("Process %d finished its job!, partial sum is %f\n", my_rank, partial_integral);
-
-        MPI_Send(&partial_integral, 1, MPI_DOUBLE, 0, 0, MPI_COMM_WORLD); //Sends data to the main process
+        stop = b;
+        per_process_steps += remainder;
     }
-    else {
-        printf("Greetings from master process %d of %d!, I will now compute the integral:", my_rank, comm_sz);
-        printf("Steps in each integral: %d", per_process_steps);
-        double integral = 0.0;
-        for (int q = 1; q < comm_sz; q++) 
-        {
-            MPI_Recv(&partial_integral, 1, MPI_DOUBLE, q, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            integral += partial_integral;
-        }
+           
+    partial_integral = trapezoidal(fn,start, stop, per_process_steps);
+    
+    printf("Process %d finished its job!, partial sum is %f\n", my_rank, partial_integral);
 
-        printf("The value of the integral is: %f", integral);
+    double total_integral = 0.0;
+
+    MPI_Reduce(&partial_integral, &total_integral, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    // Pre built: input, output, count?, datatype, method, communication channel
+    
+    if (my_rank == 0)
+    {
+        printf("\nFinal integral result: %.10f\n", total_integral);
     }
 
     MPI_Finalize();
