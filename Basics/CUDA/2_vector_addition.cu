@@ -27,10 +27,41 @@ void initialize_vector(float* vec, int N, float value)
     }
 }
 
-void vector_addition_3D(const float* A, const float* B, float* C, int nx, int ny, int nz)
+__global__ void vector_addition_3D(const float* A, const float* B, float* C, int nx, int ny, int nz)
 {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-    
+    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    int k = blockIdx.z * blockDim.z + threadIdx.z;
+
+    if (i < nx && j < ny && k < nz)
+    {
+        int idx = i + j * nx + k * nx * ny; 
+        if(idx < nx*ny*nz)
+        {
+            C[idx] = A[idx] + B[idx];
+        }
+    }
+}
+
+void generate_3D_grid(int N, dim3 &gridDim, dim3 &blockDim)
+{
+    int threadsPerBlock = 8; // 8x8x8 = 512 threads per block
+    blockDim = dim3(threadsPerBlock, threadsPerBlock, threadsPerBlock);
+
+    int blocksX = (int)ceil(cbrt((float)N) / threadsPerBlock);
+    int blocksY = blocksX;
+    int blocksZ = blocksX;
+
+    gridDim = dim3(blocksX, blocksY, blocksZ);
+}
+
+void generate_vector_3D(int N, float* h_A, float* h_B)
+{
+    for (int i = 0; i < N; ++i)
+    {
+        h_A[i] = static_cast<float>(i);
+        h_B[i] = static_cast<float>(i * 2);
+    }
 }
 
 int main ()
@@ -104,6 +135,54 @@ int main ()
     free(h_B);
     free(h_C);
     free(h_C_ref);
+
+    // Test 3D vector addition
+    const int N3D = 1 << 15; // 32K elements
+    size_t size3D = N3D * sizeof(float);
+    float *h_A3D = (float*)malloc(size3D);
+    float *h_B3D = (float*)malloc(size3D);
+    float *h_C3D = (float*)malloc(size3D);  
+
+    generate_vector_3D(N3D, h_A3D, h_B3D);
+
+    float *d_A3D, *d_B3D, *d_C3D;
+    cudaMalloc((void**)&d_A3D, size3D);
+    cudaMalloc((void**)&d_B3D, size3D);
+    cudaMalloc((void**)&d_C3D, size3D);
+
+    cudaMemcpy(d_A3D, h_A3D, size3D, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B3D, h_B3D, size3D, cudaMemcpyHostToDevice);
+
+    dim3 gridDim3D, blockDim3D;
+    generate_3D_grid(N3D, gridDim3D, blockDim3D);
+
+    // Time
+
+    cudaEvent_t start3D, stop3D;
+    cudaEventCreate(&start3D);
+    cudaEventCreate(&stop3D);
+
+    cudaEventRecord(start3D);   
+    vector_addition_3D<<<gridDim3D, blockDim3D>>>(d_A3D, d_B3D, d_C3D, blockDim3D.x * gridDim3D.x, blockDim3D.y * gridDim3D.y, blockDim3D.z * gridDim3D.z);
+    cudaEventRecord(stop3D);
+
+    cudaDeviceSynchronize();
+
+    cudaMemcpy(h_C3D, d_C3D, size3D, cudaMemcpyDeviceToHost);
+
+    float gpu_time3D = 0;
+    cudaEventElapsedTime(&gpu_time3D, start3D, stop3D);
+    printf("3D GPU time: %.3f ms\n", gpu_time3D);
+
+    // Free device memory for 3D vectors
+    cudaFree(d_A3D);
+    cudaFree(d_B3D);
+    cudaFree(d_C3D);
+
+    // Free host memory for 3D vectors
+    free(h_A3D);
+    free(h_B3D);
+    free(h_C3D);
 
     return 0;
 }
