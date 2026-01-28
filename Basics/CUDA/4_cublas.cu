@@ -1,11 +1,10 @@
-#include <cuda.h>
-
 #include <cuda_runtime.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <vector>
 #include <cublasLt.h>
-#include <cublas.h>
+#include <cublas_v2.h>
+#include <cuda_fp16.h>
 
 void CHECK_CUDA(cudaError_t err)
 {
