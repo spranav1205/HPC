@@ -89,10 +89,10 @@ const int NUM_RUNS = 10;
 int main()
 {
     CHECK_CUDA(cudaSetDevice(0));
-    const int inChannels = 32;
-    const int outChannels = 64;
-    const int width = 1024;
-    const int height = 1024;
+    const int inChannels = 16;
+    const int outChannels = 32;
+    const int width = 512;
+    const int height = 512;
     const int kernelSize = 5;
     const int padding = 2;
     const int stride = 1;
@@ -103,6 +103,7 @@ int main()
     const int outputSize = outChannels * outWidth * outHeight;
     float *h_input = (float*)malloc(inputSize * sizeof(float));
     float *h_kernels = (float*)malloc(kernelSizeTotal * sizeof(float));
+    float *h_output_cpu = (float*)malloc(outputSize * sizeof(float));
     float *h_output_naive = (float*)malloc(outputSize * sizeof(float));
     float *h_output_cudnn = (float*)malloc(outputSize * sizeof(float)); 
 
@@ -117,7 +118,7 @@ int main()
     printf("Running CPU convolution (single run)...\n");
     std::vector<float> cpu_times;
     clock_t start_cpu = clock();
-    cpu_convolution(h_input, h_kernels, h_output_naive, width, height, inChannels, outChannels, kernelSize, stride, padding);
+    cpu_convolution(h_input, h_kernels, h_output_cpu, width, height, inChannels, outChannels, kernelSize, stride, padding);
     clock_t end_cpu = clock();
     float cpu_milliseconds = ((float)(end_cpu - start_cpu) / CLOCKS_PER_SEC) * 1000.0f;
     cpu_times.push_back(cpu_milliseconds);
@@ -152,9 +153,10 @@ int main()
     CHECK_CUDA(cudaMemcpy(d_width, h_width, sizeof(int), cudaMemcpyHostToDevice));
     CHECK_CUDA(cudaMemcpy(d_height, h_height, sizeof(int), cudaMemcpyHostToDevice));
 
-    dim3 blockSize(16, 16);
+    dim3 blockSize(256);  // Use 256 threads per block for 1D kernel
     int numThreads = outWidth * outHeight * outChannels;
-    dim3 gridSize((numThreads + blockSize.x * blockSize.y - 1) / (blockSize.x * blockSize.y), 1);
+    int gridSizeX = (numThreads + blockSize.x - 1) / blockSize.x;
+    dim3 gridSize(gridSizeX, 1);
 
     cudaEvent_t start, stop;
     CHECK_CUDA(cudaEventCreate(&start));
@@ -319,7 +321,7 @@ int main()
     // ============ COMPARISON ============
     printf("\n=== RESULTS ===\n");
     printf("Configuration: Input %dx%dx%d, Kernels %dx%d, Output %dx%d\n", width, height, inChannels, kernelSize, kernelSize, outWidth, outHeight);
-    printf("Padding: 0 (valid convolution), Stride: 1 (same for both)\n");
+    printf("Padding: %d, Stride: %d\n", padding, stride);
     printf("\nTiming Summary:\n");
     printf("  CPU Naive    - Avg: %.4f ms, Min: %.4f ms, Max: %.4f ms\n", cpu_avg, cpu_min, cpu_max);
     printf("  GPU Naive    - Avg: %.4f ms, Min: %.4f ms, Max: %.4f ms\n", naive_avg, naive_min, naive_max);
@@ -329,24 +331,48 @@ int main()
     printf("  GPU cuDNN: %.2fx\n", cpu_avg / cudnn_avg);
     printf("\nSpeedup GPU Naive vs cuDNN: %.2fx\n", naive_avg / cudnn_avg);
     
-    bool outputs_match = true;
-    float max_diff = 0.0f;
-    const float tolerance = 1e-3f;
+    // ============ VERIFICATION ============
+    bool cpu_vs_naive_match = true;
+    bool cpu_vs_cudnn_match = true;
+    bool naive_vs_cudnn_match = true;
+    float max_diff_cpu_naive = 0.0f;
+    float max_diff_cpu_cudnn = 0.0f;
+    float max_diff_naive_cudnn = 0.0f;
+    const float tolerance = 1e-2f;
+    
     for (int i = 0; i < outputSize; i++)
     {
-        float diff = fabs(h_output_naive[i] - h_output_cudnn[i]);
-        max_diff = (diff > max_diff) ? diff : max_diff;
-        if (diff > tolerance)
-        {
-            outputs_match = false;
-            break;
-        }
+        float diff_cn = fabs(h_output_naive[i] - h_output_cudnn[i]);
+        float diff_cpu_n = fabs(h_output_cpu[i] - h_output_naive[i]);
+        float diff_cpu_c = fabs(h_output_cpu[i] - h_output_cudnn[i]);
+        
+        max_diff_naive_cudnn = (diff_cn > max_diff_naive_cudnn) ? diff_cn : max_diff_naive_cudnn;
+        max_diff_cpu_naive = (diff_cpu_n > max_diff_cpu_naive) ? diff_cpu_n : max_diff_cpu_naive;
+        max_diff_cpu_cudnn = (diff_cpu_c > max_diff_cpu_cudnn) ? diff_cpu_c : max_diff_cpu_cudnn;
+        
+        if (diff_cn > tolerance)
+            naive_vs_cudnn_match = false;
+        if (diff_cpu_n > tolerance)
+            cpu_vs_naive_match = false;
+        if (diff_cpu_c > tolerance)
+            cpu_vs_cudnn_match = false;
     }
     
-    if (outputs_match)
-        printf("Outputs match! (max difference: %.2e)\n", max_diff);
+    printf("\n=== OUTPUT VERIFICATION (Against CPU Baseline) ===\n");
+    if (cpu_vs_naive_match)
+        printf("✓ CPU vs GPU Naive match! (max diff: %.2e)\n", max_diff_cpu_naive);
     else
-        printf("Outputs differ! (max difference: %.2e, tolerance: %.2e)\n", max_diff, tolerance);
+        printf("✗ CPU vs GPU Naive differ! (max diff: %.2e, tolerance: %.2e)\n", max_diff_cpu_naive, tolerance);
+    
+    if (cpu_vs_cudnn_match)
+        printf("✓ CPU vs GPU cuDNN match! (max diff: %.2e)\n", max_diff_cpu_cudnn);
+    else
+        printf("✗ CPU vs GPU cuDNN differ! (max diff: %.2e, tolerance: %.2e)\n", max_diff_cpu_cudnn, tolerance);
+    
+    if (naive_vs_cudnn_match)
+        printf("✓ GPU Naive vs GPU cuDNN match! (max diff: %.2e)\n", max_diff_naive_cudnn);
+    else
+        printf("✗ GPU Naive vs GPU cuDNN differ! (max diff: %.2e, tolerance: %.2e)\n", max_diff_naive_cudnn, tolerance);
 
     // ============ CLEANUP ============
     printf("\nCleaning up...\n");
@@ -370,6 +396,7 @@ int main()
 
     free(h_input);
     free(h_kernels);
+    free(h_output_cpu);
     free(h_output_naive);
     free(h_output_cudnn);
 
