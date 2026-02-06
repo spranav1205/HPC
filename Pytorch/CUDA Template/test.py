@@ -1,34 +1,44 @@
 import torch
-import cuda_add_extension
+import time
+import activation_cuda_backend as activation_cuda
 
-class benchmark:
-    def __init__(self, func, *args):
-        self.func = func
-        self.args = args
+class fn(torch.autograd.Function):
+    @staticmethod
+    def forward(x):
+        x = activation_cuda.activation(x)
+        return x
 
-    def __enter__(self):
-        torch.cuda.synchronize()
-        self.start_time = torch.cuda.Event(enable_timing=True)
-        self.end_time = torch.cuda.Event(enable_timing=True)
-        self.start_time.record()
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output, grad_output
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.end_time.record()
-        torch.cuda.synchronize()
-        elapsed_time = self.start_time.elapsed_time(self.end_time)
-        print(f"Elapsed time: {elapsed_time:.2f} ms")
+class torchVersion:
+    # Same functionality implemented in PyTorch
+    @staticmethod
+    def forward(x):
+        return x * x + 2 * x
+    
+def benchmark(fn, x, name, num_iters=100):
+    for _ in range(10):
+        y = fn.forward(x)
+    torch.cuda.synchronize()
 
-class torch_version:
-    def __init__(self, version):
-        self.version = version
+    start = time.time()
+    for _ in range(num_iters):
+        y = fn.forward(x)
+    torch.cuda.synchronize()
+    end = time.time()
 
-    def __enter__(self):
-        self.original_version = torch.__version__
-        torch.__version__ = self.version
+    avg_time = (end - start) / num_iters
+    print(f"{name} average time over {num_iters} iterations: {avg_time*1000:.4f} ms")
+    return y
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        torch.__version__ = self.original_version
+def main():
+    torch.manual_seed(0)
+    x = torch.randn(1000, 1000, device='cuda')
+    c = benchmark(fn, x, "Custom CUDA Extension")
+    c_torch = benchmark(torchVersion, x, "PyTorch Implementation")
 
 
-
-print("Success!" if torch.allclose(c, a + b) else "Result mismatch")
+if __name__ == "__main__":
+    main()

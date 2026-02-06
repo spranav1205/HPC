@@ -1,10 +1,11 @@
 from setuptools import setup
 from torch.utils.cpp_extension import BuildExtension, CUDAExtension
 
+# python setup.py install
 setup(
-    name='cuda_add_extension',
+    name='activation_cuda',
     ext_modules=[
-        CUDAExtension('cuda_add_extension', [
+        CUDAExtension('activation_cuda_backend', [
             'kernel.cu',
         ])
     ],
