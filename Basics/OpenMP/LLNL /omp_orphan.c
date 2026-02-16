@@ -33,7 +33,7 @@ int main (int argc, char *argv[]) {
 
     for (i=0; i < VECLEN; i++)
     a[i] = b[i] = 1.0 * i;
-    sum = 0.0;
+    sum = 0.0; // HAS TO BE OUTSIDE and HAS TO BE SHARED
 
     // Parallel region is created here, but the loop reduction construct is outside of it, making it an orphaned directive.
     #pragma omp parallel // Uses all available threads by default
